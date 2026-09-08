@@ -10,7 +10,7 @@ const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 
 const manifest = {
     id: 'org.topxx.cinema',
-    version: '6.0.0', // Bản bóc tách
+    version: '6.0.0',
     name: 'TopXX Cinema',
     description: 'Xem phim mới nhất - Bản bóc tách nguồn',
     resources: ['catalog', 'stream', 'meta'],
@@ -45,7 +45,7 @@ async function getMovies() {
     }
 }
 
-// Hàm bóc tách link video gốc từ iframe embed
+// Hàm bóc tách link video gốc từ embed
 async function extractStreamFromEmbed(embedUrl) {
     try {
         // Bước 1: Tải trang embed
@@ -107,7 +107,6 @@ async function extractStreamFromEmbed(embedUrl) {
         // Bước 4: Tìm link trong script JSON (thường là cấu hình player)
         $('script').each((i, elem) => {
             const content = $(elem).html() || '';
-            // Tìm các URL dạng file: hoặc stream:
             const jsonUrls = content.match(/https?:\/\/[^"'\s]+(?:\.m3u8|\.mp4|\.webm)[^"'\s]*/g);
             if (jsonUrls) {
                 jsonUrls.forEach((url, idx) => {

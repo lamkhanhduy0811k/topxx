@@ -1,194 +1,146 @@
 // addon.js
 const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
 const axios = require('axios');
-const cheerio = require('cheerio');
 
-// Cấu hình
-const API_BASE = 'https://topxx.vip/api/v1';
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-const REFERER = 'https://topxx.vip/';
+// Cấu hình API
+const API_BASE = 'https://www.xxvnapi.com/api';
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
 
+// Manifest
 const manifest = {
-    id: 'org.topxx.cinema',
-    version: '12.0.0', // Tăng version để Stremio nhận diện
-    name: 'TopXX Cinema',
-    description: 'Xem phim mới nhất - Bản HLS trực tiếp',
+    id: 'com.xxvnapi.cinema',
+    version: '1.0.0',
+    name: 'XXVN Cinema',
+    description: 'Xem phim từ XXVN API',
     resources: ['catalog', 'stream', 'meta'],
-    types: ['movie'],
+    types: ['movie', 'series'],
     catalogs: [
         {
             type: 'movie',
-            id: 'topxx-latest',
-            name: 'Phim Mới Nhất'
+            id: 'phim-moi-cap-nhat',
+            name: 'Phim Mới Cập Nhật',
+            extra: [ { name: 'skip', isRequired: false } ]
         }
     ],
-    idPrefixes: ['topxx_']
+    idPrefixes: ['xxvn_']
 };
 
 const builder = new addonBuilder(manifest);
 
 // Hàm lấy danh sách phim
-async function getMovies() {
+async function fetchCatalog(page = 1) {
+    const url = `${API_BASE}/phim-moi-cap-nhat?page=${page}`;
     try {
-        const response = await axios.get(`${API_BASE}/movies/latest?page=1`, {
-            headers: {
-                'User-Agent': USER_AGENT,
-                'Accept': 'application/json',
-                'Referer': REFERER
-            },
-            timeout: 15000
-        });
-        return response.data;
+        const res = await axios.get(url, { headers: { 'User-Agent': USER_AGENT, 'Accept': 'application/json' }, timeout: 15000 });
+        return res.data;
     } catch (error) {
-        console.error('❌ Lỗi API:', error.message);
+        console.error('Lỗi lấy danh sách:', error.message);
         return null;
     }
 }
 
-// Hàm bóc tách link HLS từ iframe embed
-async function extractHlsUrl(embedUrl) {
+// Hàm lấy chi tiết phim (dùng endpoint /phim/{slug})
+async function fetchDetail(slug) {
+    const url = `${API_BASE}/phim/${slug}`;
     try {
-        // Tải trang embed
-        const response = await axios.get(embedUrl, {
-            headers: {
-                'User-Agent': USER_AGENT,
-                'Referer': REFERER
-            },
-            timeout: 10000
-        });
-        
-        const html = response.data;
-        
-        // Tìm link m3u8 trong HTML
-        const m3u8Match = html.match(/https?:\/\/[^"'\s]+\.m3u8[^"'\s]*/);
-        if (m3u8Match) {
-            console.log('✅ Tìm thấy link HLS:', m3u8Match[0]);
-            return m3u8Match[0];
-        }
-        
-        // Tìm trong script (window.EMBED_CONFIG)
-        const configMatch = html.match(/hls_url[:\s]*["']([^"']+)["']/);
-        if (configMatch) {
-            console.log('✅ Tìm thấy HLS trong config:', configMatch[1]);
-            return configMatch[1].replace(/\\\//g, '/');
-        }
-        
-        // Tìm link mp4
-        const mp4Match = html.match(/https?:\/\/[^"'\s]+\.mp4[^"'\s]*/);
-        if (mp4Match) {
-            return mp4Match[0];
-        }
-        
-        return null;
+        const res = await axios.get(url, { headers: { 'User-Agent': USER_AGENT, 'Accept': 'application/json' }, timeout: 15000 });
+        return res.data;
     } catch (error) {
-        console.error('❌ Lỗi bóc tách:', error.message);
+        console.error('Lỗi lấy chi tiết:', error.message);
         return null;
     }
 }
 
 // Xử lý Catalog
-builder.defineCatalogHandler(async () => {
-    const data = await getMovies();
-    
-    if (!data || !data.data) {
+builder.defineCatalogHandler(async (args) => {
+    const page = args.extra?.skip ? Math.floor(args.extra.skip / 30) + 1 : 1;
+    const data = await fetchCatalog(page);
+
+    if (!data || !data.items || data.items.length === 0) {
         return { metas: [] };
     }
-    
-    const metas = data.data.map(movie => {
-        const viTrans = movie.trans?.find(t => t.locale === 'vi') || movie.trans?.[0];
-        return {
-            id: 'topxx_' + movie.code,
+
+    const metas = data.items.map(item => ({
+        id: 'xxvn_' + (item.slug || item._id),
+        type: 'movie',
+        name: item.name || item.origin_name || 'Không tên',
+        poster: item.poster_url || '',
+        background: item.thumb_url || '',
+        description: item.content || '',
+        releaseInfo: item.year ? String(item.year) : '',
+        runtime: item.time || '',
+        genres: Array.isArray(item.category) ? item.category.map(c => c.name) : []
+    }));
+
+    // Hỗ trợ phân trang
+    if (data.pagination?.totalPages && page < data.pagination.totalPages) {
+        metas.push({
+            id: 'load-more',
             type: 'movie',
-            name: viTrans?.title || movie.code,
-            poster: movie.thumbnail,
-            background: movie.thumbnail,
-            description: viTrans?.description || '',
-            releaseInfo: movie.publish_at ? new Date(movie.publish_at).getFullYear().toString() : '',
-            runtime: movie.duration,
-            genres: movie.genres?.map(g => g.trans?.[0]?.name || g.code) || []
-        };
-    });
-    
-    console.log(`✅ Đã lấy ${metas.length} phim`);
+            name: 'Load More...',
+            poster: '',
+            nextCursor: page * 30
+        });
+    }
+
     return { metas };
 });
 
-// Xử lý Meta
+// Xử lý Meta (Chi tiết phim)
 builder.defineMetaHandler(async (args) => {
-    const movieCode = args.id.replace('topxx_', '');
-    
-    const data = await getMovies();
-    const movie = data?.data?.find(m => m.code === movieCode);
-    
-    if (!movie) {
-        return { meta: null };
-    }
-    
-    const viTrans = movie.trans?.find(t => t.locale === 'vi') || movie.trans?.[0];
-    
+    const slug = args.id.replace('xxvn_', '');
+    const data = await fetchDetail(slug);
+
+    if (!data) return { meta: null };
+
     return {
         meta: {
-            id: 'topxx_' + movie.code,
+            id: 'xxvn_' + slug,
             type: 'movie',
-            name: viTrans?.title || movie.code,
-            poster: movie.thumbnail,
-            background: movie.thumbnail,
-            description: viTrans?.description || '',
-            releaseInfo: movie.publish_at ? new Date(movie.publish_at).getFullYear().toString() : '',
-            runtime: movie.duration,
-            genres: movie.genres?.map(g => g.trans?.[0]?.name || g.code) || []
+            name: data.name || 'Không tên',
+            poster: data.poster_url || '',
+            background: data.thumb_url || '',
+            description: data.content || '',
+            releaseInfo: data.year ? String(data.year) : '',
+            runtime: data.time || '',
+            genres: Array.isArray(data.category) ? data.category.map(c => c.name) : []
         }
     };
 });
 
-// Xử lý Stream - TÌM LINK HLS TRỰC TIẾP
+// Xử lý Stream (Lấy link phát từ chi tiết)
 builder.defineStreamHandler(async (args) => {
-    const movieCode = args.id.replace('topxx_', '');
-    
-    const data = await getMovies();
-    const movie = data?.data?.find(m => m.code === movieCode);
-    
-    if (!movie || !movie.sources) {
+    const slug = args.id.replace('xxvn_', '');
+    const data = await fetchDetail(slug);
+
+    if (!data || !data.episodes || data.episodes.length === 0) {
         return { streams: [] };
     }
-    
+
     const streams = [];
-    
-    // Duyệt qua từng source
-    for (const source of movie.sources) {
-        // Nếu là embed, bóc tách để tìm HLS
-        if (source.type === 'embed' || source.link.includes('embed')) {
-            const hlsUrl = await extractHlsUrl(source.link);
-            if (hlsUrl) {
+    // Duyệt qua các tập phim
+    data.episodes.forEach(ep => {
+        // Duyệt qua các server trong tập
+        (ep.server_data || []).forEach(server => {
+            if (server.link_embed) {
                 streams.push({
-                    name: `TopXX HLS Server ${streams.length + 1}`,
-                    description: `${movie.quality || 'HD'} - HLS trực tiếp`,
-                    url: hlsUrl,
-                    behaviorHints: {
-                        notWebReady: true,
-                        proxyHeaders: {
-                            request: {
-                                'User-Agent': USER_AGENT,
-                                'Referer': source.link
-                            }
-                        }
-                    }
+                    name: `Server: ${server.server_name || 'Embed'}`,
+                    description: `Tập: ${ep.name || ''}`,
+                    url: server.link_embed,
+                    behaviorHints: { notWebReady: true }
                 });
             }
-        } else {
-            // Nguồn trực tiếp (mp4, m3u8)
-            streams.push({
-                name: `TopXX Direct Server ${streams.length + 1}`,
-                description: `${movie.quality || 'HD'}`,
-                url: source.link,
-                behaviorHints: {
-                    notWebReady: true
-                }
-            });
-        }
-    }
-    
-    console.log(`✅ Tìm thấy ${streams.length} nguồn HLS trực tiếp`);
+            if (server.link_m3u8) {
+                streams.push({
+                    name: `Server: ${server.server_name || 'HLS'}`,
+                    description: `Tập: ${ep.name || ''}`,
+                    url: server.link_m3u8,
+                    behaviorHints: { notWebReady: true }
+                });
+            }
+        });
+    });
+
     return { streams };
 });
 
@@ -196,5 +148,4 @@ builder.defineStreamHandler(async (args) => {
 const port = process.env.PORT || 7000;
 serveHTTP(builder.getInterface(), { port });
 
-console.log('✅ TopXX Cinema (Bản HLS) v12.0.0 đang chạy!');
-console.log('🔗 URL: https://topxx-vjws.onrender.com/manifest.json');
+console.log('XXVN Cinema Addon đang chạy tại port ' + port);

@@ -24,16 +24,9 @@ const manifest = {
                 { name: 'search', isRequired: false },
                 { name: 'skip', isRequired: false }
             ]
-        },
-        {
-            type: 'movie',
-            id: 'topxx-action',
-            name: 'Hành Động',
-            extra: [
-                { name: 'skip', isRequired: false }
-            ]
         }
-    ]
+    ],
+    idPrefixes: ['topxx_']
 };
 
 const builder = new addonBuilder(manifest);
@@ -65,7 +58,7 @@ function transformToCatalog(movies) {
         const viTrans = movie.trans?.find(t => t.locale === 'vi') || movie.trans?.[0];
         
         return {
-            id: movie.code,
+            id: 'topxx_' + movie.code,
             type: 'movie',
             name: viTrans?.title || 'Unknown',
             poster: movie.thumbnail,
@@ -116,7 +109,7 @@ builder.defineCatalogHandler(async (args) => {
 // Xử lý Meta (chi tiết phim)
 builder.defineMetaHandler(async (args) => {
     try {
-        const movieCode = args.id;
+        const movieCode = args.id.replace('topxx_', '');
         
         // Lấy dữ liệu từ API
         const data = await fetchMovies(1);
@@ -130,7 +123,7 @@ builder.defineMetaHandler(async (args) => {
         
         return {
             meta: {
-                id: movie.code,
+                id: 'topxx_' + movie.code,
                 type: 'movie',
                 name: viTrans?.title || 'Unknown',
                 poster: movie.thumbnail,
@@ -149,10 +142,10 @@ builder.defineMetaHandler(async (args) => {
     }
 });
 
-// Xử lý Stream (Nguồn phát) - ĐÃ CẢI TIẾN
+// Xử lý Stream (Nguồn phát) - ĐÃ SỬA HOÀN CHỈNH
 builder.defineStreamHandler(async (args) => {
     try {
-        const movieCode = args.id;
+        const movieCode = args.id.replace('topxx_', '');
         
         // Lấy dữ liệu từ API
         const data = await fetchMovies(1);
@@ -173,23 +166,25 @@ builder.defineStreamHandler(async (args) => {
 
             // Xử lý riêng cho từng loại nguồn
             if (source.type === 'embed') {
-                // Nguồn embed thường cần proxy và không phải file media trực tiếp
                 stream.behaviorHints = {
                     notWebReady: true,
                     proxyHeaders: {
                         request: {
-                            'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36',
+                            'User-Agent': USER_AGENT,
                             'Referer': 'https://topxx.vip/'
                         }
                     }
                 };
             } else if (source.link.includes('.m3u8')) {
-                // Nguồn HLS, Stremio tự nhận diện
+                stream.behaviorHints = {
+                    notWebReady: true
+                };
+            } else {
+                // Nguồn MP4 hoặc URL trực tiếp
                 stream.behaviorHints = {
                     notWebReady: true
                 };
             }
-            // Các loại khác (mp4 trực tiếp) không cần behaviorHints đặc biệt
 
             return stream;
         });

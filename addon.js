@@ -18,8 +18,8 @@ const manifest = {
     catalogs: [
         {
             type: 'movie',
-            id: 'topxx-latest',
-            name: 'Phim Mới',
+            id: 'topxx-today',
+            name: 'Phim Hôm Nay',
             extra: [
                 { name: 'search', isRequired: false },
                 { name: 'skip', isRequired: false }
@@ -31,10 +31,12 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-// Hàm lấy dữ liệu từ API
+// Hàm lấy dữ liệu từ API - DÙNG ENDPOINT /movies/today
 async function fetchMovies(page = 1, searchTerm = '') {
     try {
-        let url = `${API_BASE}/movies/latest?page=${page}`;
+        let url = `${API_BASE}/movies/today`;
+        
+        // Nếu có search, dùng endpoint search (nếu có)
         if (searchTerm) {
             url = `${API_BASE}/movies/search?q=${encodeURIComponent(searchTerm)}`;
         }
@@ -77,27 +79,15 @@ function transformToCatalog(movies) {
 // Xử lý Catalog
 builder.defineCatalogHandler(async (args) => {
     try {
-        const page = args.extra?.skip ? Math.floor(args.extra.skip / 30) + 1 : 1;
         const searchTerm = args.extra?.search || '';
         
-        const data = await fetchMovies(page, searchTerm);
+        const data = await fetchMovies(1, searchTerm);
         
         if (!data || !data.data) {
             return { metas: [] };
         }
         
         const metas = transformToCatalog(data.data);
-        
-        // Phân trang
-        if (data.links?.next) {
-            metas.push({
-                id: 'load-more',
-                type: 'movie',
-                name: '📥 Tải thêm phim...',
-                poster: '',
-                nextCursor: (page + 1) * 30
-            });
-        }
         
         return { metas };
     } catch (error) {
@@ -112,7 +102,7 @@ builder.defineMetaHandler(async (args) => {
         const movieCode = args.id.replace('topxx_', '');
         
         // Lấy dữ liệu từ API
-        const data = await fetchMovies(1);
+        const data = await fetchMovies();
         const movie = data?.data?.find(m => m.code === movieCode);
         
         if (!movie) {
@@ -142,13 +132,13 @@ builder.defineMetaHandler(async (args) => {
     }
 });
 
-// Xử lý Stream (Nguồn phát) - ĐÃ SỬA HOÀN CHỈNH
+// Xử lý Stream (Nguồn phát)
 builder.defineStreamHandler(async (args) => {
     try {
         const movieCode = args.id.replace('topxx_', '');
         
         // Lấy dữ liệu từ API
-        const data = await fetchMovies(1);
+        const data = await fetchMovies();
         const movie = data?.data?.find(m => m.code === movieCode);
         
         if (!movie) {
@@ -157,7 +147,6 @@ builder.defineStreamHandler(async (args) => {
         
         // Tạo mảng streams từ sources
         const streams = movie.sources.map((source, index) => {
-            // Tạo object stream cơ bản
             const stream = {
                 name: `TopXX - Server ${index + 1} (${source.type.toUpperCase()})`,
                 description: `Chất lượng: ${movie.quality || 'HD'} - ${source.type}`,
@@ -180,7 +169,6 @@ builder.defineStreamHandler(async (args) => {
                     notWebReady: true
                 };
             } else {
-                // Nguồn MP4 hoặc URL trực tiếp
                 stream.behaviorHints = {
                     notWebReady: true
                 };

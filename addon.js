@@ -2,28 +2,23 @@
 const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
 const axios = require('axios');
 
-// Cấu hình API - DÙNG /movies/latest (có sources)
+// Cấu hình API
 const API_BASE = 'https://topxx.vip/api/v1';
-const USER_AGENT = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36';
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-// Manifest addon
+// Manifest - Giữ nguyên version để Stremio không bị cache
 const manifest = {
     id: 'org.topxx.cinema',
-    version: '1.1.0', // Tăng version để Stremio nhận diện addon mới
+    version: '1.4.0', // Tăng version để ép Stremio cài lại
     name: 'TopXX Cinema',
-    description: 'Xem phim mới nhất từ TopXX - Có nguồn phát',
-    logo: 'https://i.imgur.com/abc123.png',
-    resources: ['catalog', 'stream', 'meta'],
+    description: 'Xem phim mới nhất - Bản chống treo',
+    resources: ['catalog', 'stream'],
     types: ['movie'],
     catalogs: [
         {
             type: 'movie',
             id: 'topxx-latest',
-            name: 'Phim Mới Nhất',
-            extra: [
-                { name: 'search', isRequired: false },
-                { name: 'skip', isRequired: false }
-            ]
+            name: 'Phim Mới Nhất'
         }
     ],
     idPrefixes: ['topxx_']
@@ -31,159 +26,103 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-// Hàm lấy dữ liệu từ /movies/latest (có sources)
-async function fetchMovies(page = 1, searchTerm = '') {
+// Hàm lấy dữ liệu - Dùng fetch thay vì axios cho nhẹ và tránh lỗi timeout
+async function getMovies() {
     try {
-        let url = `${API_BASE}/movies/latest?page=${page}`;
-        if (searchTerm) {
-            url = `${API_BASE}/movies/search?q=${encodeURIComponent(searchTerm)}`;
-        }
-        
-        const response = await axios.get(url, {
+        const response = await fetch(`${API_BASE}/movies/latest?page=1`, {
+            method: 'GET',
             headers: {
                 'User-Agent': USER_AGENT,
-                'Accept': 'application/json'
-            }
+                'Accept': 'application/json',
+                'Referer': 'https://topxx.vip/'
+            },
+            signal: AbortSignal.timeout(10000) // 10 giây
         });
-        return response.data;
+        
+        if (!response.ok) throw new Error('API lỗi: ' + response.status);
+        return await response.json();
     } catch (error) {
         console.error('❌ Lỗi API:', error.message);
         return null;
     }
 }
 
-// Chuyển đổi dữ liệu sang định dạng Stremio
-function transformToCatalog(movies) {
-    return movies.map(movie => {
+// Xử lý Catalog - Đảm bảo hiện phim
+builder.defineCatalogHandler(async () => {
+    const data = await getMovies();
+    
+    if (!data || !data.data) {
+        return { metas: [] };
+    }
+    
+    const metas = data.data.map(movie => {
         const viTrans = movie.trans?.find(t => t.locale === 'vi') || movie.trans?.[0];
-        
         return {
             id: 'topxx_' + movie.code,
             type: 'movie',
-            name: viTrans?.title || 'Unknown',
+            name: viTrans?.title || movie.code,
             poster: movie.thumbnail,
             background: movie.thumbnail,
-            description: viTrans?.description || 'Xem phim miễn phí',
-            releaseInfo: movie.publish_at ? new Date(movie.publish_at).getFullYear().toString() : '',
-            runtime: movie.duration,
-            genres: movie.genres?.map(g => {
-                const viGenre = g.trans?.find(t => t.locale === 'vi');
-                return viGenre?.name || g.code;
-            }) || ['Phim']
+            description: viTrans?.description || '',
+            genres: movie.genres?.map(g => g.trans?.[0]?.name || g.code) || []
         };
     });
-}
-
-// Xử lý Catalog (Danh sách phim)
-builder.defineCatalogHandler(async (args) => {
-    try {
-        const page = args.extra?.skip ? Math.floor(args.extra.skip / 30) + 1 : 1;
-        const searchTerm = args.extra?.search || '';
-        
-        const data = await fetchMovies(page, searchTerm);
-        
-        if (!data || !data.data) {
-            return { metas: [] };
-        }
-        
-        const metas = transformToCatalog(data.data);
-        
-        return { metas };
-    } catch (error) {
-        console.error('Lỗi catalog:', error.message);
-        return { metas: [] };
-    }
+    
+    console.log(`✅ Đã lấy ${metas.length} phim`);
+    return { metas };
 });
 
-// Xử lý Meta (Chi tiết phim)
-builder.defineMetaHandler(async (args) => {
-    try {
-        const movieCode = args.id.replace('topxx_', '');
-        
-        const data = await fetchMovies(1);
-        const movie = data?.data?.find(m => m.code === movieCode);
-        
-        if (!movie) {
-            return { meta: null };
-        }
-        
-        const viTrans = movie.trans?.find(t => t.locale === 'vi') || movie.trans?.[0];
-        
-        return {
-            meta: {
-                id: 'topxx_' + movie.code,
-                type: 'movie',
-                name: viTrans?.title || 'Unknown',
-                poster: movie.thumbnail,
-                background: movie.thumbnail,
-                description: viTrans?.description || '',
-                releaseInfo: movie.publish_at ? new Date(movie.publish_at).getFullYear().toString() : '',
-                runtime: movie.duration,
-                genres: movie.genres?.map(g => {
-                    const viGenre = g.trans?.find(t => t.locale === 'vi');
-                    return viGenre?.name || g.code;
-                }) || []
-            }
-        };
-    } catch (error) {
-        return { meta: null };
-    }
-});
-
-// Xử lý Stream (NGUỒN PHÁT - ĐÃ THÊM)
+// Xử lý Stream - Tìm nguồn phát, nếu không có thì trả về [] thay vì treo
 builder.defineStreamHandler(async (args) => {
     try {
-        const movieCode = args.id.replace('topxx_', '');
+        const code = args.id.replace('topxx_', '');
+        console.log('🔍 Đang tìm phim:', code);
         
-        // Lấy dữ liệu từ API
-        const data = await fetchMovies(1);
-        const movie = data?.data?.find(m => m.code === movieCode);
+        // Gọi API riêng cho phim này để lấy sources chính xác
+        // Thử gọi API chi tiết phim (nếu có endpoint riêng)
+        let movie = null;
+        const data = await getMovies();
+        movie = data?.data?.find(m => m.code === code);
         
+        // Nếu không tìm thấy trong danh sách, thử gọi API chi tiết
         if (!movie) {
-            return { streams: [] };
-        }
-        
-        // Kiểm tra xem movie có sources không
-        if (!movie.sources || movie.sources.length === 0) {
-            console.log('❌ Phim không có nguồn phát:', movieCode);
-            return { streams: [] };
-        }
-        
-        // Tạo mảng streams từ sources
-        const streams = movie.sources.map((source, index) => {
-            const stream = {
-                name: `TopXX - Server ${index + 1} (${source.type.toUpperCase()})`,
-                description: `Chất lượng: ${movie.quality || 'HD'} - ${source.type}`,
-                url: source.link,
-            };
-
-            // Xử lý riêng cho từng loại nguồn
-            if (source.type === 'embed') {
-                stream.behaviorHints = {
-                    notWebReady: true,
-                    proxyHeaders: {
-                        request: {
-                            'User-Agent': USER_AGENT,
-                            'Referer': 'https://topxx.vip/'
-                        }
-                    }
-                };
-            } else if (source.link.includes('.m3u8')) {
-                stream.behaviorHints = {
-                    notWebReady: true
-                };
-            } else {
-                stream.behaviorHints = {
-                    notWebReady: true
-                };
+            try {
+                const detailResponse = await fetch(`${API_BASE}/movies/${code}`, {
+                    headers: { 'User-Agent': USER_AGENT }
+                });
+                if (detailResponse.ok) {
+                    movie = await detailResponse.json();
+                }
+            } catch (e) {
+                // Bỏ qua, dùng danh sách
             }
-
-            return stream;
-        });
+        }
         
+        if (!movie || !movie.sources || movie.sources.length === 0) {
+            console.log('⚠️ Không có nguồn cho:', code);
+            return { streams: [] };
+        }
+        
+        // Tạo streams
+        const streams = movie.sources.map((source, index) => ({
+            name: `TopXX Server ${index + 1}`,
+            description: `${movie.quality || 'HD'} - ${source.type}`,
+            url: source.link,
+            behaviorHints: {
+                notWebReady: true,
+                proxyHeaders: {
+                    request: {
+                        'User-Agent': USER_AGENT,
+                        'Referer': 'https://topxx.vip/'
+                    }
+                }
+            }
+        }));
+        
+        console.log(`✅ Tìm thấy ${streams.length} nguồn cho ${code}`);
         return { streams };
     } catch (error) {
-        console.error('Lỗi stream:', error.message);
+        console.error('❌ Lỗi stream:', error.message);
         return { streams: [] };
     }
 });
@@ -192,6 +131,5 @@ builder.defineStreamHandler(async (args) => {
 const port = process.env.PORT || 7000;
 serveHTTP(builder.getInterface(), { port });
 
-console.log('✅ TopXX Cinema Addon đang chạy!');
-console.log(`🔗 URL: http://localhost:${port}/manifest.json`);
-console.log('📱 Cài vào Stremio tại: http://YOUR_IP:' + port + '/manifest.json');
+console.log('✅ TopXX Cinema (Bản chống treo) đang chạy!');
+console.log('🔗 URL: https://topxx-vjws.onrender.com/manifest.json');

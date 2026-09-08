@@ -1,21 +1,18 @@
 // addon.js
 const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
 const axios = require('axios');
+const cheerio = require('cheerio');
 
 // Cấu hình
 const API_BASE = 'https://topxx.vip/api/v1';
+const BASE_URL = 'https://topxx.vip';
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-const REFERER = 'https://topxx.vip/';
-
-// Proxy để vượt CORS (thử nhiều proxy)
-const PROXY_1 = 'https://corsproxy.io/?url=';
-const PROXY_2 = 'https://api.allorigins.win/raw?url=';
 
 const manifest = {
     id: 'org.topxx.cinema',
-    version: '5.0.0', // Tăng version
+    version: '6.0.0', // Bản bóc tách
     name: 'TopXX Cinema',
-    description: 'Xem phim mới nhất - Bản proxy kép',
+    description: 'Xem phim mới nhất - Bản bóc tách nguồn',
     resources: ['catalog', 'stream', 'meta'],
     types: ['movie'],
     catalogs: [
@@ -37,7 +34,7 @@ async function getMovies() {
             headers: {
                 'User-Agent': USER_AGENT,
                 'Accept': 'application/json',
-                'Referer': REFERER
+                'Referer': BASE_URL
             },
             timeout: 15000
         });
@@ -45,6 +42,118 @@ async function getMovies() {
     } catch (error) {
         console.error('❌ Lỗi API:', error.message);
         return null;
+    }
+}
+
+// Hàm bóc tách link video gốc từ iframe embed
+async function extractStreamFromEmbed(embedUrl) {
+    try {
+        // Bước 1: Tải trang embed
+        const response = await axios.get(embedUrl, {
+            headers: {
+                'User-Agent': USER_AGENT,
+                'Referer': BASE_URL
+            },
+            timeout: 10000
+        });
+        
+        const html = response.data;
+        const $ = cheerio.load(html);
+        
+        const streams = [];
+        
+        // Bước 2: Tìm file .m3u8 (HLS) trực tiếp trong HTML
+        const m3u8Matches = html.match(/https?:\/\/[^"'\s]+\.m3u8[^"'\s]*/g);
+        if (m3u8Matches) {
+            m3u8Matches.forEach((url, i) => {
+                streams.push({
+                    name: `HLS Server ${i + 1}`,
+                    description: 'Nguồn HLS gốc',
+                    url: url,
+                    behaviorHints: {
+                        notWebReady: true,
+                        proxyHeaders: {
+                            request: {
+                                'User-Agent': USER_AGENT,
+                                'Referer': embedUrl
+                            }
+                        }
+                    }
+                });
+            });
+        }
+        
+        // Bước 3: Tìm file .mp4 trực tiếp
+        const mp4Matches = html.match(/https?:\/\/[^"'\s]+\.mp4[^"'\s]*/g);
+        if (mp4Matches) {
+            mp4Matches.forEach((url, i) => {
+                streams.push({
+                    name: `MP4 Server ${i + 1}`,
+                    description: 'Nguồn MP4 gốc',
+                    url: url,
+                    behaviorHints: {
+                        notWebReady: true,
+                        proxyHeaders: {
+                            request: {
+                                'User-Agent': USER_AGENT,
+                                'Referer': embedUrl
+                            }
+                        }
+                    }
+                });
+            });
+        }
+        
+        // Bước 4: Tìm link trong script JSON (thường là cấu hình player)
+        $('script').each((i, elem) => {
+            const content = $(elem).html() || '';
+            // Tìm các URL dạng file: hoặc stream:
+            const jsonUrls = content.match(/https?:\/\/[^"'\s]+(?:\.m3u8|\.mp4|\.webm)[^"'\s]*/g);
+            if (jsonUrls) {
+                jsonUrls.forEach((url, idx) => {
+                    streams.push({
+                        name: `JSON Server ${idx + 1}`,
+                        description: 'Nguồn từ JSON',
+                        url: url,
+                        behaviorHints: {
+                            notWebReady: true,
+                            proxyHeaders: {
+                                request: {
+                                    'User-Agent': USER_AGENT,
+                                    'Referer': embedUrl
+                                }
+                            }
+                        }
+                    });
+                });
+            }
+        });
+        
+        // Bước 5: Tìm iframe lồng nhau (nếu embed chứa embed khác)
+        $('iframe').each((i, elem) => {
+            const nestedSrc = $(elem).attr('src');
+            if (nestedSrc && nestedSrc.startsWith('http')) {
+                streams.push({
+                    name: `Nested Server ${i + 1}`,
+                    description: 'Nguồn lồng nhau',
+                    url: nestedSrc,
+                    behaviorHints: {
+                        notWebReady: true,
+                        proxyHeaders: {
+                            request: {
+                                'User-Agent': USER_AGENT,
+                                'Referer': embedUrl
+                            }
+                        }
+                    }
+                });
+            }
+        });
+        
+        return streams;
+    } catch (error) {
+        console.error('❌ Lỗi bóc tách:', error.message);
+        return [];
     }
 }
 
@@ -103,10 +212,11 @@ builder.defineMetaHandler(async (args) => {
     };
 });
 
-// Xử lý Stream - DÙNG PROXY KÉP
+// Xử lý Stream - BÓC TÁCH NGUỒN GỐC
 builder.defineStreamHandler(async (args) => {
     const movieCode = args.id.replace('topxx_', '');
     
+    // Lấy dữ liệu từ API
     const data = await getMovies();
     const movie = data?.data?.find(m => m.code === movieCode);
     
@@ -114,47 +224,34 @@ builder.defineStreamHandler(async (args) => {
         return { streams: [] };
     }
     
-    // Tạo streams với proxy kép (thử cả 2 proxy)
-    const streams = movie.sources.map((source, index) => {
-        // Sử dụng proxy 1
-        const proxiedUrl1 = PROXY_1 + encodeURIComponent(source.link);
-        // Sử dụng proxy 2
-        const proxiedUrl2 = PROXY_2 + encodeURIComponent(source.link);
-        
-        return {
-            name: `TopXX Server ${index + 1}`,
-            description: `${movie.quality || 'HD'} - ${source.type}`,
-            // Thử proxy 1 trước, nếu không được dùng proxy 2
-            url: proxiedUrl1,
-            behaviorHints: {
-                notWebReady: true,
-                proxyHeaders: {
-                    request: {
-                        'User-Agent': USER_AGENT,
-                        'Referer': REFERER
-                    }
+    const allStreams = [];
+    
+    // Lấy từng source và bóc tách
+    for (const source of movie.sources) {
+        if (source.type === 'embed' || source.link.includes('embed')) {
+            // Bóc tách link gốc từ embed
+            const extractedStreams = await extractStreamFromEmbed(source.link);
+            allStreams.push(...extractedStreams);
+        } else {
+            // Nguồn trực tiếp (mp4, m3u8)
+            allStreams.push({
+                name: `TopXX Direct`,
+                description: `${movie.quality || 'HD'}`,
+                url: source.link,
+                behaviorHints: {
+                    notWebReady: true
                 }
-            }
-        };
-    });
-    
-    // Thêm stream dự phòng với proxy 2
-    streams.push({
-        name: 'TopXX Proxy 2',
-        description: `${movie.quality || 'HD'} - Dự phòng`,
-        url: PROXY_2 + encodeURIComponent(movie.sources[0]?.link || ''),
-        behaviorHints: {
-            notWebReady: true
+            });
         }
-    });
+    }
     
-    console.log(`✅ Tìm thấy ${streams.length} nguồn (đã proxy kép)`);
-    return { streams };
+    console.log(`✅ Bóc tách được ${allStreams.length} nguồn gốc cho ${movieCode}`);
+    return { streams: allStreams };
 });
 
 // Khởi động server
 const port = process.env.PORT || 7000;
 serveHTTP(builder.getInterface(), { port });
 
-console.log('✅ TopXX Cinema (Bản Proxy Kép) v5.0.0 đang chạy!');
+console.log('✅ TopXX Cinema (Bản bóc tách) v6.0.0 đang chạy!');
 console.log('🔗 URL: https://topxx-vjws.onrender.com/manifest.json');

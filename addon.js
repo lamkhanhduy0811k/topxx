@@ -3,13 +3,15 @@ const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
 const axios = require('axios');
 const cheerio = require('cheerio');
 
-const BASE_URL = 'https://topxx.vip';
+// Cấu hình
+const DOMAIN = 'https://topxx.vip'; // Trang web phim
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 const manifest = {
     id: 'org.topxx.cinema',
-    version: '7.0.0',
+    version: '8.0.0',
     name: 'TopXX Cinema',
-    description: 'Xem phim mới nhất - Bản Termux',
+    description: 'Xem phim mới nhất - Bản link trực tiếp',
     resources: ['catalog', 'stream', 'meta'],
     types: ['movie'],
     catalogs: [
@@ -24,21 +26,19 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-// Hàm lấy danh sách phim từ trang chủ web (SCRAPE thay vì dùng API)
+// Hàm lấy danh sách phim từ trang chủ
 async function getMovies() {
     try {
-        const response = await axios.get(`${BASE_URL}/phim-moi`, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
+        const response = await axios.get(`${DOMAIN}/phim-moi`, {
+            headers: { 'User-Agent': USER_AGENT }
         });
-        const $ = cheerio.load(response.data);
         
-        // Tìm các thẻ chứa phim trên trang web
+        const $ = cheerio.load(response.data);
         const movies = [];
-        $('.movie-item, .film-item, .movie-row, .col-md-3').each((i, elem) => {
+        
+        $('.movie-item, .film-item, .movie-row').each((i, elem) => {
             const link = $(elem).find('a').attr('href');
-            const title = $(elem).find('h3, .title, .movie-title').text().trim();
+            const title = $(elem).find('.title, h3').text().trim();
             const poster = $(elem).find('img').attr('src');
             
             if (link && title) {
@@ -50,8 +50,6 @@ async function getMovies() {
                     poster: poster || '',
                     background: poster || '',
                     description: 'Xem phim miễn phí',
-                    releaseInfo: '',
-                    runtime: '',
                     genres: []
                 });
             }
@@ -59,39 +57,54 @@ async function getMovies() {
         
         return movies;
     } catch (error) {
-        console.error('❌ Lỗi API:', error.message);
+        console.error('❌ Lỗi lấy phim:', error.message);
         return [];
     }
 }
 
-// Hàm lấy nguồn phát từ trang chi tiết phim
-async function getStreamsFromPage(movieCode) {
+// Hàm lấy link video trực tiếp (HLS/MP4) từ trang chi tiết phim
+async function getStreams(movieCode) {
     try {
-        const detailPage = await axios.get(`${BASE_URL}/phim/${movieCode}`,
+        const response = await axios.get(`${DOMAIN}/phim/${movieCode}`,
             {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                }
+                headers: { 'User-Agent': USER_AGENT }
             }
         );
         
-        const $ = cheerio.load(detailPage.data);
+        const $ = cheerio.load(response.data);
         const streams = [];
         
-        // Tìm iframe embed
+        // Tìm link .m3u8 hoặc .mp4 trực tiếp trong HTML (bất kỳ vị trí nào)
+        const html = response.data;
+        const videoUrls = html.match(/https?:\/\/[^"'\s]+\.(m3u8|mp4)[^"'\s]*/g);
+        
+        if (videoUrls) {
+            videoUrls.forEach((url, i) => {
+                streams.push({
+                    name: `Video Server ${i + 1}`,
+                    description: 'Nguồn video trực tiếp',
+                    url: url,
+                    behaviorHints: {
+                        notWebReady: true
+                    }
+                });
+            });
+        }
+        
+        // Tìm link trong iframe (nếu có thì ghi nhận nhưng chú ý: Stremio không phát iframe)
         $('iframe').each((i, elem) => {
             const src = $(elem).attr('src');
-            if (src) {
+            if (src && (src.includes('.m3u8') || src.includes('.mp4'))) {
                 streams.push({
                     name: `Embed Server ${i + 1}`,
-                    description: 'Nguồn phát',
+                    description: 'Nguồn embed có link trực tiếp',
                     url: src,
                     behaviorHints: {
                         notWebReady: true,
                         proxyHeaders: {
                             request: {
-                                'User-Agent': 'Mozilla/5.0',
-                                'Referer': BASE_URL
+                                'User-Agent': USER_AGENT,
+                                'Referer': DOMAIN
                             }
                         }
                     }
@@ -99,17 +112,26 @@ async function getStreamsFromPage(movieCode) {
             }
         });
         
-        // Tìm link HLS/MP4 trực tiếp
-        $('video source, source').each((i, elem) => {
-            const src = $(elem).attr('src');
-            if (src && (src.includes('.m3u8') || src.includes('.mp4'))) {
-                streams.push({
-                    name: `Video Server ${i + 1}`,
-                    description: 'Nguồn video',
-                    url: src,
-                    behaviorHints: {
-                        notWebReady: true
-                    }
+        // Tìm video trong script JSON
+        $('script').each((i, elem) => {
+            const content = $(elem).html() || '';
+            const scriptUrls = content.match(/https?:\/\/[^"'\s]+\.(m3u8|mp4)[^"'\s]*/g);
+            if (scriptUrls) {
+                scriptUrls.forEach((url, idx) => {
+                    streams.push({
+                        name: `JSON Server ${idx + 1}`,
+                        description: 'Nguồn từ JSON',
+                        url: url,
+                        behaviorHints: {
+                            notWebReady: true,
+                            proxyHeaders: {
+                                request: {
+                                    'User-Agent': USER_AGENT,
+                                    'Referer': DOMAIN
+                                }
+                            }
+                        }
+                    });
                 });
             }
         });
@@ -145,8 +167,6 @@ builder.defineMetaHandler(async (args) => {
             poster: movie.poster,
             background: movie.background,
             description: movie.description,
-            releaseInfo: movie.releaseInfo,
-            runtime: movie.runtime,
             genres: movie.genres
         }
     };
@@ -155,35 +175,14 @@ builder.defineMetaHandler(async (args) => {
 // Xử lý Stream
 builder.defineStreamHandler(async (args) => {
     const movieCode = args.id.replace('topxx_', '');
-    const streams = await getStreamsFromPage(movieCode);
+    const streams = await getStreams(movieCode);
     
-    if (streams.length > 0) {
-        return { streams };
-    }
-    
-    // Nếu không tìm thấy, gọi API dự phòng
-    try {
-        const data = await axios.get(`https://topxx.vip/api/v1/movies/${movieCode}`);
-        const movie = data.data;
-        if (movie?.sources?.length > 0) {
-            return {
-                streams: movie.sources.map((s, i) => ({
-                    name: `API Server ${i + 1}`,
-                    url: s.link,
-                    behaviorHints: { notWebReady: true }
-                }))
-            };
-        }
-    } catch (error) {
-        console.error('❌ Lỗi dự phòng:', error.message);
-    }
-    
-    return { streams: [] };
+    return { streams };
 });
 
 // Khởi động server
 const port = process.env.PORT || 7000;
 serveHTTP(builder.getInterface(), { port });
 
-console.log('✅ TopXX Cinema v7.0.0 đang chạy!');
+console.log('✅ TopXX Cinema v8.0.0 đang chạy!');
 console.log('🔗 URL: http://localhost:' + port + '/manifest.json');

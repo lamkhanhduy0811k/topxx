@@ -2,24 +2,24 @@
 const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
 const axios = require('axios');
 
-// Cấu hình API
+// Cấu hình API - DÙNG /movies/latest (có sources)
 const API_BASE = 'https://topxx.vip/api/v1';
 const USER_AGENT = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36';
 
 // Manifest addon
 const manifest = {
     id: 'org.topxx.cinema',
-    version: '1.0.0',
+    version: '1.1.0', // Tăng version để Stremio nhận diện addon mới
     name: 'TopXX Cinema',
-    description: 'Xem phim mới nhất từ TopXX - Miễn phí, chất lượng cao',
+    description: 'Xem phim mới nhất từ TopXX - Có nguồn phát',
     logo: 'https://i.imgur.com/abc123.png',
     resources: ['catalog', 'stream', 'meta'],
-    types: ['movie', 'series'],
+    types: ['movie'],
     catalogs: [
         {
             type: 'movie',
-            id: 'topxx-today',
-            name: 'Phim Hôm Nay',
+            id: 'topxx-latest',
+            name: 'Phim Mới Nhất',
             extra: [
                 { name: 'search', isRequired: false },
                 { name: 'skip', isRequired: false }
@@ -31,12 +31,10 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-// Hàm lấy dữ liệu từ API - DÙNG ENDPOINT /movies/today
+// Hàm lấy dữ liệu từ /movies/latest (có sources)
 async function fetchMovies(page = 1, searchTerm = '') {
     try {
-        let url = `${API_BASE}/movies/today`;
-        
-        // Nếu có search, dùng endpoint search (nếu có)
+        let url = `${API_BASE}/movies/latest?page=${page}`;
         if (searchTerm) {
             url = `${API_BASE}/movies/search?q=${encodeURIComponent(searchTerm)}`;
         }
@@ -76,12 +74,13 @@ function transformToCatalog(movies) {
     });
 }
 
-// Xử lý Catalog
+// Xử lý Catalog (Danh sách phim)
 builder.defineCatalogHandler(async (args) => {
     try {
+        const page = args.extra?.skip ? Math.floor(args.extra.skip / 30) + 1 : 1;
         const searchTerm = args.extra?.search || '';
         
-        const data = await fetchMovies(1, searchTerm);
+        const data = await fetchMovies(page, searchTerm);
         
         if (!data || !data.data) {
             return { metas: [] };
@@ -96,13 +95,12 @@ builder.defineCatalogHandler(async (args) => {
     }
 });
 
-// Xử lý Meta (chi tiết phim)
+// Xử lý Meta (Chi tiết phim)
 builder.defineMetaHandler(async (args) => {
     try {
         const movieCode = args.id.replace('topxx_', '');
         
-        // Lấy dữ liệu từ API
-        const data = await fetchMovies();
+        const data = await fetchMovies(1);
         const movie = data?.data?.find(m => m.code === movieCode);
         
         if (!movie) {
@@ -132,16 +130,22 @@ builder.defineMetaHandler(async (args) => {
     }
 });
 
-// Xử lý Stream (Nguồn phát)
+// Xử lý Stream (NGUỒN PHÁT - ĐÃ THÊM)
 builder.defineStreamHandler(async (args) => {
     try {
         const movieCode = args.id.replace('topxx_', '');
         
         // Lấy dữ liệu từ API
-        const data = await fetchMovies();
+        const data = await fetchMovies(1);
         const movie = data?.data?.find(m => m.code === movieCode);
         
         if (!movie) {
+            return { streams: [] };
+        }
+        
+        // Kiểm tra xem movie có sources không
+        if (!movie.sources || movie.sources.length === 0) {
+            console.log('❌ Phim không có nguồn phát:', movieCode);
             return { streams: [] };
         }
         

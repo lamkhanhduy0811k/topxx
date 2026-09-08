@@ -7,11 +7,14 @@ const API_BASE = 'https://topxx.vip/api/v1';
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const REFERER = 'https://topxx.vip/';
 
+// Proxy CORS để vượt qua chặn iframe
+const CORS_PROXY = 'https://corsproxy.io/?url=';
+
 const manifest = {
     id: 'org.topxx.cinema',
-    version: '3.0.0', // Tăng version để Stremio nhận diện
+    version: '4.0.0', // Tăng version
     name: 'TopXX Cinema',
-    description: 'Xem phim mới nhất - Bản embed',
+    description: 'Xem phim mới nhất - Bản có proxy',
     resources: ['catalog', 'stream', 'meta'],
     types: ['movie'],
     catalogs: [
@@ -35,7 +38,7 @@ async function getMovies() {
                 'Accept': 'application/json',
                 'Referer': REFERER
             },
-            timeout: 15000 // 15 giây
+            timeout: 15000
         });
         return response.data;
     } catch (error) {
@@ -99,11 +102,10 @@ builder.defineMetaHandler(async (args) => {
     };
 });
 
-// Xử lý Stream - CHUYÊN CHO EMBED
+// Xử lý Stream - DÙNG PROXY CORS
 builder.defineStreamHandler(async (args) => {
     const movieCode = args.id.replace('topxx_', '');
     
-    // Lấy dữ liệu từ API
     const data = await getMovies();
     const movie = data?.data?.find(m => m.code === movieCode);
     
@@ -111,38 +113,28 @@ builder.defineStreamHandler(async (args) => {
         return { streams: [] };
     }
     
-    // Tạo streams từ sources
+    // Tạo streams từ sources với proxy
     const streams = movie.sources.map((source, index) => {
-        // Nếu là embed, thêm proxyHeaders để vượt CORS
-        if (source.type === 'embed') {
-            return {
-                name: `TopXX Server ${index + 1}`,
-                description: `${movie.quality || 'HD'} - Embed`,
-                url: source.link,
-                behaviorHints: {
-                    notWebReady: true,
-                    proxyHeaders: {
-                        request: {
-                            'User-Agent': USER_AGENT,
-                            'Referer': REFERER
-                        }
-                    }
-                }
-            };
-        }
+        // Thêm proxy vào URL để vượt CORS
+        const proxiedUrl = CORS_PROXY + encodeURIComponent(source.link);
         
-        // Nếu không phải embed
         return {
             name: `TopXX Server ${index + 1}`,
-            description: `${movie.quality || 'HD'}`,
-            url: source.link,
+            description: `${movie.quality || 'HD'} - ${source.type}`,
+            url: proxiedUrl,
             behaviorHints: {
-                notWebReady: true
+                notWebReady: true,
+                proxyHeaders: {
+                    request: {
+                        'User-Agent': USER_AGENT,
+                        'Referer': REFERER
+                    }
+                }
             }
         };
     });
     
-    console.log(`✅ Tìm thấy ${streams.length} nguồn cho ${movieCode}`);
+    console.log(`✅ Tìm thấy ${streams.length} nguồn (đã proxy)`);
     return { streams };
 });
 
@@ -150,5 +142,5 @@ builder.defineStreamHandler(async (args) => {
 const port = process.env.PORT || 7000;
 serveHTTP(builder.getInterface(), { port });
 
-console.log('✅ TopXX Cinema (Bản Embed) v3.0.0 đang chạy!');
+console.log('✅ TopXX Cinema (Bản Proxy) v4.0.0 đang chạy!');
 console.log('🔗 URL: https://topxx-vjws.onrender.com/manifest.json');

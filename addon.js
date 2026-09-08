@@ -2,16 +2,15 @@
 const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
 const axios = require('axios');
 
-// Cấu hình API
+// Cấu hình
 const API_BASE = 'https://www.xxvnapi.com/api';
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-// Manifest
 const manifest = {
     id: 'com.xxvnapi.cinema',
     version: '1.0.0',
     name: 'XXVN Cinema',
-    description: 'Xem phim từ XXVN API',
+    description: 'Xem phim từ XXVN API - Có nguồn phát',
     resources: ['catalog', 'stream', 'meta'],
     types: ['movie', 'series'],
     catalogs: [
@@ -19,7 +18,7 @@ const manifest = {
             type: 'movie',
             id: 'phim-moi-cap-nhat',
             name: 'Phim Mới Cập Nhật',
-            extra: [ { name: 'skip', isRequired: false } ]
+            extra: [{ name: 'skip', isRequired: false }]
         }
     ],
     idPrefixes: ['xxvn_']
@@ -29,24 +28,28 @@ const builder = new addonBuilder(manifest);
 
 // Hàm lấy danh sách phim
 async function fetchCatalog(page = 1) {
-    const url = `${API_BASE}/phim-moi-cap-nhat?page=${page}`;
     try {
-        const res = await axios.get(url, { headers: { 'User-Agent': USER_AGENT, 'Accept': 'application/json' }, timeout: 15000 });
+        const res = await axios.get(`${API_BASE}/phim-moi-cap-nhat?page=${page}`, {
+            headers: { 'User-Agent': USER_AGENT, 'Accept': 'application/json' },
+            timeout: 15000
+        });
         return res.data;
     } catch (error) {
-        console.error('Lỗi lấy danh sách:', error.message);
+        console.error('❌ Lỗi danh sách:', error.message);
         return null;
     }
 }
 
-// Hàm lấy chi tiết phim (dùng endpoint /phim/{slug})
+// Hàm lấy chi tiết phim
 async function fetchDetail(slug) {
-    const url = `${API_BASE}/phim/${slug}`;
     try {
-        const res = await axios.get(url, { headers: { 'User-Agent': USER_AGENT, 'Accept': 'application/json' }, timeout: 15000 });
+        const res = await axios.get(`${API_BASE}/phim/${slug}`, {
+            headers: { 'User-Agent': USER_AGENT, 'Accept': 'application/json' },
+            timeout: 15000
+        });
         return res.data;
     } catch (error) {
-        console.error('Lỗi lấy chi tiết:', error.message);
+        console.error('❌ Lỗi chi tiết:', error.message);
         return null;
     }
 }
@@ -55,15 +58,13 @@ async function fetchDetail(slug) {
 builder.defineCatalogHandler(async (args) => {
     const page = args.extra?.skip ? Math.floor(args.extra.skip / 30) + 1 : 1;
     const data = await fetchCatalog(page);
-
-    if (!data || !data.items || data.items.length === 0) {
-        return { metas: [] };
-    }
-
+    
+    if (!data || !data.items) return { metas: [] };
+    
     const metas = data.items.map(item => ({
-        id: 'xxvn_' + (item.slug || item._id),
-        type: 'movie',
-        name: item.name || item.origin_name || 'Không tên',
+        id: 'xxvn_' + item.slug,
+        type: item.type || 'movie',
+        name: item.name || 'Không tên',
         poster: item.poster_url || '',
         background: item.thumb_url || '',
         description: item.content || '',
@@ -71,8 +72,8 @@ builder.defineCatalogHandler(async (args) => {
         runtime: item.time || '',
         genres: Array.isArray(item.category) ? item.category.map(c => c.name) : []
     }));
-
-    // Hỗ trợ phân trang
+    
+    // Phân trang
     if (data.pagination?.totalPages && page < data.pagination.totalPages) {
         metas.push({
             id: 'load-more',
@@ -82,21 +83,21 @@ builder.defineCatalogHandler(async (args) => {
             nextCursor: page * 30
         });
     }
-
+    
     return { metas };
 });
 
-// Xử lý Meta (Chi tiết phim)
+// Xử lý Meta
 builder.defineMetaHandler(async (args) => {
     const slug = args.id.replace('xxvn_', '');
     const data = await fetchDetail(slug);
-
+    
     if (!data) return { meta: null };
-
+    
     return {
         meta: {
             id: 'xxvn_' + slug,
-            type: 'movie',
+            type: data.type || 'movie',
             name: data.name || 'Không tên',
             poster: data.poster_url || '',
             background: data.thumb_url || '',
@@ -108,39 +109,64 @@ builder.defineMetaHandler(async (args) => {
     };
 });
 
-// Xử lý Stream (Lấy link phát từ chi tiết)
+// Xử lý Stream - QUAN TRỌNG: Lấy nguồn phát từ episodes
 builder.defineStreamHandler(async (args) => {
     const slug = args.id.replace('xxvn_', '');
     const data = await fetchDetail(slug);
-
-    if (!data || !data.episodes || data.episodes.length === 0) {
-        return { streams: [] };
-    }
-
+    
+    if (!data || !data.episodes) return { streams: [] };
+    
     const streams = [];
-    // Duyệt qua các tập phim
+    
+    // Duyệt qua tất cả các tập phim
     data.episodes.forEach(ep => {
-        // Duyệt qua các server trong tập
+        // Duyệt qua tất cả các server trong tập
         (ep.server_data || []).forEach(server => {
             if (server.link_embed) {
                 streams.push({
-                    name: `Server: ${server.server_name || 'Embed'}`,
+                    name: `Embed - ${server.server_name || 'Server'}`,
                     description: `Tập: ${ep.name || ''}`,
                     url: server.link_embed,
-                    behaviorHints: { notWebReady: true }
+                    behaviorHints: {
+                        notWebReady: true,
+                        proxyHeaders: {
+                            request: {
+                                'User-Agent': USER_AGENT,
+                                'Referer': 'https://www.xxvnapi.com/'
+                            }
+                        }
+                    }
                 });
             }
             if (server.link_m3u8) {
                 streams.push({
-                    name: `Server: ${server.server_name || 'HLS'}`,
+                    name: `HLS - ${server.server_name || 'Server'}`,
                     description: `Tập: ${ep.name || ''}`,
                     url: server.link_m3u8,
-                    behaviorHints: { notWebReady: true }
+                    behaviorHints: {
+                        notWebReady: true,
+                        proxyHeaders: {
+                            request: {
+                                'User-Agent': USER_AGENT,
+                                'Referer': 'https://www.xxvnapi.com/'
+                            }
+                        }
+                    }
+                });
+            }
+            if (server.link_mp4) {
+                streams.push({
+                    name: `MP4 - ${server.server_name || 'Server'}`,
+                    description: `Tập: ${ep.name || ''}`,
+                    url: server.link_mp4,
+                    behaviorHints: {
+                        notWebReady: true
+                    }
                 });
             }
         });
     });
-
+    
     return { streams };
 });
 
@@ -148,4 +174,5 @@ builder.defineStreamHandler(async (args) => {
 const port = process.env.PORT || 7000;
 serveHTTP(builder.getInterface(), { port });
 
-console.log('XXVN Cinema Addon đang chạy tại port ' + port);
+console.log('✅ XXVN Cinema đang chạy!');
+console.log('🔗 URL: https://topxx-vjws.onrender.com/manifest.json');

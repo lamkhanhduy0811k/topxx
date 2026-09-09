@@ -3,14 +3,14 @@ const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
 const axios = require('axios');
 
 // Cấu hình
-const API_BASE = 'https://phim.nguonc.com/api';
+const API_BASE = 'https://ophim1.com';
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 const manifest = {
-    id: 'com.nguonc.cinema',
-    version: '6.0.0',
-    name: 'NGUONC Cinema',
-    description: 'Xem phim từ NGUONC API - Bản bóc tách nguồn',
+    id: 'com.ophim.cinema',
+    version: '1.0.0',
+    name: 'OPhim Cinema',
+    description: 'Xem phim từ OPhim API',
     resources: ['catalog', 'stream', 'meta'],
     types: ['movie', 'series'],
     catalogs: [
@@ -21,14 +21,14 @@ const manifest = {
             extra: [{ name: 'skip', isRequired: false }]
         }
     ],
-    idPrefixes: ['nguonc_']
+    idPrefixes: ['ophim_']
 };
 
 const builder = new addonBuilder(manifest);
 
 async function fetchCatalog(page = 1) {
     try {
-        const res = await axios.get(`${API_BASE}/films/phim-moi-cap-nhat?page=${page}`, {
+        const res = await axios.get(`${API_BASE}/danh-sach/phim-moi-cap-nhat?page=${page}`, {
             headers: { 'User-Agent': USER_AGENT },
             timeout: 15000
         });
@@ -41,49 +41,13 @@ async function fetchCatalog(page = 1) {
 
 async function fetchDetail(slug) {
     try {
-        const res = await axios.get(`${API_BASE}/film/${slug}`, {
+        const res = await axios.get(`${API_BASE}/phim/${slug}`, {
             headers: { 'User-Agent': USER_AGENT },
             timeout: 15000
         });
         return res.data;
     } catch (error) {
         console.error('❌ Lỗi chi tiết:', error.message);
-        return null;
-    }
-}
-
-// Hàm bóc tách link HLS từ iframe
-async function extractStreamFromEmbed(embedUrl) {
-    try {
-        const response = await axios.get(embedUrl, {
-            headers: {
-                'User-Agent': USER_AGENT,
-                'Referer': 'https://phim.nguonc.com/'
-            },
-            timeout: 10000
-        });
-        const html = response.data;
-        
-        // Tìm link m3u8 trực tiếp
-        const m3u8Match = html.match(/https?:\/\/[^"'\s]+\.m3u8[^"'\s]*/);
-        if (m3u8Match) {
-            return m3u8Match[0];
-        }
-        
-        // Tìm link trong script JSON
-        const configMatch = html.match(/hls_url[:\s]*["']([^"']+)["']/);
-        if (configMatch) {
-            return configMatch[1].replace(/\\\//g, '/');
-        }
-        
-        // Tìm link mp4
-        const mp4Match = html.match(/https?:\/\/[^"'\s]+\.mp4[^"'\s]*/);
-        if (mp4Match) {
-            return mp4Match[0];
-        }
-        
-        return null;
-    } catch (error) {
         return null;
     }
 }
@@ -96,7 +60,7 @@ builder.defineCatalogHandler(async (args) => {
     
     return {
         metas: data.items.map(item => ({
-            id: 'nguonc_' + item.slug,
+            id: 'ophim_' + item.slug,
             type: item.type || 'movie',
             name: item.name || 'Không tên',
             poster: item.poster_url || '',
@@ -109,14 +73,14 @@ builder.defineCatalogHandler(async (args) => {
 });
 
 builder.defineMetaHandler(async (args) => {
-    const slug = args.id.replace('nguonc_', '');
+    const slug = args.id.replace('ophim_', '');
     const data = await fetchDetail(slug);
     
     if (!data) return { meta: null };
     
     return {
         meta: {
-            id: 'nguonc_' + slug,
+            id: 'ophim_' + slug,
             type: data.movie?.type || 'movie',
             name: data.movie?.name || 'Không tên',
             poster: data.movie?.poster_url || '',
@@ -129,52 +93,48 @@ builder.defineMetaHandler(async (args) => {
 });
 
 builder.defineStreamHandler(async (args) => {
-    const slug = args.id.replace('nguonc_', '');
+    const slug = args.id.replace('ophim_', '');
     const data = await fetchDetail(slug);
     
     if (!data || !data.episodes) return { streams: [] };
     
     const streams = [];
     
-    // Lấy server đầu tiên (Vietsub)
-    const servers = data.episodes[0].items || [];
+    // Lấy server đầu tiên
+    const servers = data.episodes[0].server_data || [];
     
-    for (const ep of servers.slice(0, 5)) { // Lấy 5 tập đầu
-        if (ep.embed) {
-            // Bóc tách link gốc từ iframe
-            const hlsUrl = await extractStreamFromEmbed(ep.embed);
-            if (hlsUrl) {
-                streams.push({
-                    name: `NGUONC - Vietsub`,
-                    description: `Tập ${ep.name}`,
-                    url: hlsUrl,
-                    behaviorHints: {
-                        notWebReady: true,
-                        proxyHeaders: {
-                            request: {
-                                'User-Agent': USER_AGENT,
-                                'Referer': 'https://phim.nguonc.com/'
-                            }
+    for (const server of servers) {
+        if (server.link_embed) {
+            streams.push({
+                name: `OPhim - Server`,
+                description: `Tập: ${data.episodes[0].name}`,
+                url: server.link_embed,
+                behaviorHints: {
+                    notWebReady: true,
+                    proxyHeaders: {
+                        request: {
+                            'User-Agent': USER_AGENT,
+                            'Referer': 'https://ophim1.com/'
                         }
                     }
-                });
-            } else {
-                // Nếu không tìm thấy, gửi link embed
-                streams.push({
-                    name: `NGUONC - Vietsub (Embed)`,
-                    description: `Tập ${ep.name}`,
-                    url: ep.embed,
-                    behaviorHints: {
-                        notWebReady: true,
-                        proxyHeaders: {
-                            request: {
-                                'User-Agent': USER_AGENT,
-                                'Referer': 'https://phim.nguonc.com/'
-                            }
+                }
+            });
+        }
+        if (server.link_m3u8) {
+            streams.push({
+                name: `OPhim - HLS`,
+                description: `Tập: ${data.episodes[0].name}`,
+                url: server.link_m3u8,
+                behaviorHints: {
+                    notWebReady: true,
+                    proxyHeaders: {
+                        request: {
+                            'User-Agent': USER_AGENT,
+                            'Referer': 'https://ophim1.com/'
                         }
                     }
-                });
-            }
+                }
+            });
         }
     }
     
@@ -182,4 +142,4 @@ builder.defineStreamHandler(async (args) => {
 });
 
 serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
-console.log('✅ NGUONC Cinema v6.0.0 đang chạy!');
+console.log('✅ OPhim Cinema v1.0.0 đang chạy!');

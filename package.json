@@ -9,8 +9,5 @@
   "dependencies": {
     "stremio-addon-sdk": "^1.6.2",
     "axios": "^1.6.0"
-  },
-  "engines": {
-    "node": ">=16.0.0"
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "nguonc-cinema-addon",
-  "version": "1.0.0",
+  "version": "5.0.0",
   "description": "Stremio addon - NGUONC Cinema",
   "main": "addon.js",
   "scripts": {

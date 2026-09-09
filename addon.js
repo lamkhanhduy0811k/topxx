@@ -8,9 +8,9 @@ const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 
 const manifest = {
     id: 'com.nguonc.cinema',
-    version: '5.0.0',
+    version: '6.0.0',
     name: 'NGUONC Cinema',
-    description: 'Xem phim từ NGUONC API - Miễn phí, chất lượng cao',
+    description: 'Xem phim từ NGUONC API - Bản bóc tách nguồn',
     resources: ['catalog', 'stream', 'meta'],
     types: ['movie', 'series'],
     catalogs: [
@@ -48,6 +48,42 @@ async function fetchDetail(slug) {
         return res.data;
     } catch (error) {
         console.error('❌ Lỗi chi tiết:', error.message);
+        return null;
+    }
+}
+
+// Hàm bóc tách link HLS từ iframe
+async function extractStreamFromEmbed(embedUrl) {
+    try {
+        const response = await axios.get(embedUrl, {
+            headers: {
+                'User-Agent': USER_AGENT,
+                'Referer': 'https://phim.nguonc.com/'
+            },
+            timeout: 10000
+        });
+        const html = response.data;
+        
+        // Tìm link m3u8 trực tiếp
+        const m3u8Match = html.match(/https?:\/\/[^"'\s]+\.m3u8[^"'\s]*/);
+        if (m3u8Match) {
+            return m3u8Match[0];
+        }
+        
+        // Tìm link trong script JSON
+        const configMatch = html.match(/hls_url[:\s]*["']([^"']+)["']/);
+        if (configMatch) {
+            return configMatch[1].replace(/\\\//g, '/');
+        }
+        
+        // Tìm link mp4
+        const mp4Match = html.match(/https?:\/\/[^"'\s]+\.mp4[^"'\s]*/);
+        if (mp4Match) {
+            return mp4Match[0];
+        }
+        
+        return null;
+    } catch (error) {
         return null;
     }
 }
@@ -105,20 +141,40 @@ builder.defineStreamHandler(async (args) => {
     
     for (const ep of servers.slice(0, 5)) { // Lấy 5 tập đầu
         if (ep.embed) {
-            streams.push({
-                name: `NGUONC - Vietsub`,
-                description: `Tập ${ep.name}`,
-                url: ep.embed,
-                behaviorHints: {
-                    notWebReady: true,
-                    proxyHeaders: {
-                        request: {
-                            'User-Agent': USER_AGENT,
-                            'Referer': 'https://phim.nguonc.com/'
+            // Bóc tách link gốc từ iframe
+            const hlsUrl = await extractStreamFromEmbed(ep.embed);
+            if (hlsUrl) {
+                streams.push({
+                    name: `NGUONC - Vietsub`,
+                    description: `Tập ${ep.name}`,
+                    url: hlsUrl,
+                    behaviorHints: {
+                        notWebReady: true,
+                        proxyHeaders: {
+                            request: {
+                                'User-Agent': USER_AGENT,
+                                'Referer': 'https://phim.nguonc.com/'
+                            }
                         }
                     }
-                }
-            });
+                });
+            } else {
+                // Nếu không tìm thấy, gửi link embed
+                streams.push({
+                    name: `NGUONC - Vietsub (Embed)`,
+                    description: `Tập ${ep.name}`,
+                    url: ep.embed,
+                    behaviorHints: {
+                        notWebReady: true,
+                        proxyHeaders: {
+                            request: {
+                                'User-Agent': USER_AGENT,
+                                'Referer': 'https://phim.nguonc.com/'
+                            }
+                        }
+                    }
+                });
+            }
         }
     }
     
@@ -126,4 +182,4 @@ builder.defineStreamHandler(async (args) => {
 });
 
 serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
-console.log('✅ NGUONC Cinema v5.0.0 đang chạy!');
+console.log('✅ NGUONC Cinema v6.0.0 đang chạy!');

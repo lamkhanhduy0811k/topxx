@@ -8,9 +8,9 @@ const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 
 const manifest = {
     id: 'com.nguonc.cinema',
-    version: '1.0.0',
+    version: '2.0.0',
     name: 'NGUONC Cinema',
-    description: 'Xem phim từ NGUONC API',
+    description: 'Xem phim từ NGUONC API - Bản có nguồn phát',
     resources: ['catalog', 'stream', 'meta'],
     types: ['movie', 'series'],
     catalogs: [
@@ -48,6 +48,39 @@ async function fetchDetail(slug) {
         return res.data;
     } catch (error) {
         console.error('❌ Lỗi chi tiết:', error.message);
+        return null;
+    }
+}
+
+// Hàm bóc tách link từ iframe embed
+async function extractStreamFromEmbed(embedUrl) {
+    try {
+        const response = await axios.get(embedUrl, {
+            headers: { 'User-Agent': USER_AGENT },
+            timeout: 10000
+        });
+        const html = response.data;
+        
+        // Tìm link m3u8 trực tiếp
+        const m3u8Match = html.match(/https?:\/\/[^"'\s]+\.m3u8[^"'\s]*/);
+        if (m3u8Match) {
+            return m3u8Match[0];
+        }
+        
+        // Tìm trong script JSON
+        const configMatch = html.match(/hls_url[:\s]*["']([^"']+)["']/);
+        if (configMatch) {
+            return configMatch[1].replace(/\\\//g, '/');
+        }
+        
+        // Tìm link mp4
+        const mp4Match = html.match(/https?:\/\/[^"'\s]+\.mp4[^"'\s]*/);
+        if (mp4Match) {
+            return mp4Match[0];
+        }
+        
+        return null;
+    } catch (error) {
         return null;
     }
 }
@@ -100,13 +133,33 @@ builder.defineStreamHandler(async (args) => {
     
     const streams = [];
     
-    data.episodes.forEach(ep => {
-        (ep.server_data || []).forEach(server => {
-            if (server.link_m3u8) {
+    // Lấy server đầu tiên (Vietsub)
+    const servers = data.episodes[0].items || [];
+    
+    for (const ep of servers.slice(0, 1)) { // Chỉ lấy tập 1
+        if (ep.embed) {
+            const hlsUrl = await extractStreamFromEmbed(ep.embed);
+            if (hlsUrl) {
                 streams.push({
-                    name: `HLS - ${server.server_name || 'Server'}`,
-                    description: `Tập: ${ep.name || ''}`,
-                    url: server.link_m3u8,
+                    name: `NGUONC - Vietsub`,
+                    description: `Tập ${ep.name}`,
+                    url: hlsUrl,
+                    behaviorHints: {
+                        notWebReady: true,
+                        proxyHeaders: {
+                            request: {
+                                'User-Agent': USER_AGENT,
+                                'Referer': 'https://phim.nguonc.com/'
+                            }
+                        }
+                    }
+                });
+            } else {
+                // Nếu không tìm thấy HLS, gửi link embed
+                streams.push({
+                    name: `NGUONC - Vietsub (Embed)`,
+                    description: `Tập ${ep.name}`,
+                    url: ep.embed,
                     behaviorHints: {
                         notWebReady: true,
                         proxyHeaders: {
@@ -118,27 +171,11 @@ builder.defineStreamHandler(async (args) => {
                     }
                 });
             }
-            if (server.link_embed) {
-                streams.push({
-                    name: `Embed - ${server.server_name || 'Server'}`,
-                    description: `Tập: ${ep.name || ''}`,
-                    url: server.link_embed,
-                    behaviorHints: {
-                        notWebReady: true,
-                        proxyHeaders: {
-                            request: {
-                                'User-Agent': USER_AGENT,
-                                'Referer': 'https://phim.nguonc.com/'
-                            }
-                        }
-                    }
-                });
-            }
-        });
-    });
+        }
+    }
     
     return { streams };
 });
 
 serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
-console.log('✅ NGUONC Cinema đang chạy!');
+console.log('✅ NGUONC Cinema v2.0.0 đang chạy!');

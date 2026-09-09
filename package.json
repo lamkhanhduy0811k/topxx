@@ -1,15 +1,14 @@
 {
-  "name": "topxx-cinema-addon",
-  "version": "8.0.0",
-  "description": "Stremio addon - TopXX Cinema",
+  "name": "nguonc-cinema-addon",
+  "version": "1.0.0",
+  "description": "Stremio addon - NGUONC Cinema",
   "main": "addon.js",
   "scripts": {
     "start": "node addon.js"
   },
   "dependencies": {
     "stremio-addon-sdk": "^1.6.2",
-    "axios": "^1.6.0",
-    "cheerio": "^1.0.0-rc.12"
+    "axios": "^1.6.0"
   },
   "engines": {
     "node": ">=16.0.0"
